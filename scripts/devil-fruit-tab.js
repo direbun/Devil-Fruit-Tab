@@ -24,29 +24,30 @@ Hooks.on("dnd5e.longRest", async (actor) => {
 Hooks.once("tidy5e-sheet.ready", (api) => {
   try {
     const HandlebarsTab = api?.models?.HandlebarsTab;
-    const registerCharacterTab = api?.registerCharacterTab;
-    if (!HandlebarsTab || !registerCharacterTab) return;
+    if (!HandlebarsTab) return;
 
-    registerCharacterTab(
-      new HandlebarsTab({
-        title: "Devil Fruit",
-        tabId: TAB_ID,
-        iconClass: "dft-tab-icon",
-        path: TEMPLATE_PATH,
-        getData: async (context) => {
-          const actor = context?.actor ?? context?.document ?? context?.app?.document;
-          return buildTemplateData(actor);
-        },
-        onRender: (params) => {
-          const rootEl = params?.tabContentsElement ?? params?.element;
-          const actor = params?.app?.document ?? params?.app?.actor ?? params?.actor;
-          wireTabInteractions(rootEl, actor);
+    const makeTab = () => new HandlebarsTab({
+      title: "Devil Fruit",
+      tabId: TAB_ID,
+      iconClass: "dft-tab-icon",
+      path: TEMPLATE_PATH,
+      getData: async (context) => {
+        const actor = context?.actor ?? context?.document ?? context?.app?.document;
+        return buildTemplateData(actor);
+      },
+      onRender: (params) => {
+        const rootEl = params?.tabContentsElement ?? params?.element;
+        const actor = params?.app?.document ?? params?.app?.actor ?? params?.actor;
+        wireTabInteractions(rootEl, actor);
 
-          const sheetRoot = params?.app?.element?.[0] ?? params?.app?.element ?? document;
-          hideDfItemsInSheet(sheetRoot, actor);
-        }
-      })
-    );
+        const sheetRoot = params?.app?.element?.[0] ?? params?.app?.element ?? document;
+        hideDfItemsInSheet(sheetRoot, actor);
+      }
+    });
+
+    api?.registerCharacterTab?.(makeTab());
+    api?.registerNpcTab?.(makeTab());
+    api?.registerVehicleTab?.(makeTab());
   } catch (err) {
     console.error(`${MODULE_ID} | Failed to register Tidy tab`, err);
   }
@@ -54,22 +55,23 @@ Hooks.once("tidy5e-sheet.ready", (api) => {
 
 Hooks.on("renderActorSheetV2", async (sheet, element) => {
   try {
-    if (!sheet?.actor || sheet.actor.type !== "character") return;
+    const actor = sheet?.actor ?? sheet?.document;
+    if (!actor || !["character", "npc", "vehicle"].includes(actor.type)) return;
 
     // tidy handled above, but still hide DF items
     if (element?.classList?.contains("tidy5e-sheet")) {
-      hideDfItemsInSheet(element, sheet.actor);
+      hideDfItemsInSheet(element, actor);
       return;
     }
 
-    await injectCoreTab(sheet, element);
-    hideDfItemsInSheet(element, sheet.actor);
+    await injectCoreTab(sheet, element, actor);
+    hideDfItemsInSheet(element, actor);
   } catch (err) {
     console.error(`${MODULE_ID} | renderActorSheetV2 error`, err);
   }
 });
 
-async function injectCoreTab(sheet, element) {
+async function injectCoreTab(sheet, element, actor) {
   const nav =
     element.querySelector('nav.tabs[data-group]') ||
     element.querySelector('nav.sheet-tabs[data-group]') ||
@@ -81,8 +83,8 @@ async function injectCoreTab(sheet, element) {
   const group = nav.dataset.group ?? "primary";
 
   const panel = findOrCreateCorePanel(element, group);
-  await renderTabContents(panel, sheet.actor);
-  wireTabInteractions(panel, sheet.actor);
+  await renderTabContents(panel, actor);
+  wireTabInteractions(panel, actor);
 
   if (nav.querySelector(`[data-tab="${TAB_ID}"][data-group="${group}"]`)) return;
 
@@ -163,6 +165,57 @@ function getDfItems(actor) {
   return (actor?.items?.contents ?? []).filter(isDfItem);
 }
 
+function parseCrValue(cr) {
+  if (cr == null) return 0;
+  if (typeof cr === "number") return cr;
+  const s = String(cr).trim();
+  if (!s) return 0;
+  if (s.includes("/")) {
+    const [a, b] = s.split("/");
+    const num = Number(a);
+    const den = Number(b);
+    if (Number.isFinite(num) && Number.isFinite(den) && den !== 0) return num / den;
+  }
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function getActorCR(actor) {
+  const cr =
+    foundry.utils.getProperty(actor, "system.details.cr") ??
+    foundry.utils.getProperty(actor, "system.details.challenge") ??
+    foundry.utils.getProperty(actor, "system.attributes.cr") ??
+    null;
+  return parseCrValue(cr);
+}
+
+function getNpcCrHalfUpMin1(actor) {
+  const cr = getActorCR(actor);
+  return Math.max(1, Math.ceil(cr / 2));
+}
+
+function getNpcDevilFruitChargesByCR(actor) {
+  const cr = getActorCR(actor);
+
+  if (cr <= 2) return 2;
+  if (cr <= 5) return 5;
+  if (cr <= 10) return 10;
+  if (cr <= 15) return 15;
+  if (cr <= 20) return 20;
+  if (cr <= 25) return 22;
+  // 26-30 (and anything above) => 24
+  return 24;
+}
+
+function getChargesMaxBaseForActor(actor, type, level) {
+  // NPCs use CR table for charges (except Zoan still base 0)
+  if (actor?.type === "npc") {
+    if (type === "zoan") return 0;
+    return getNpcDevilFruitChargesByCR(actor);
+  }
+  return getChargesMaxBase(type, level);
+}
+
 function buildTemplateData(actor) {
   const fruitType = (actor.getFlag(MODULE_ID, "fruitType") ?? "paramecia");
   const fruitName = (actor.getFlag(MODULE_ID, "fruitName") ?? "Devil Fruit");
@@ -176,13 +229,15 @@ function buildTemplateData(actor) {
   const level = getActorLevel(actor);
   const highestSpellLevel = getHighestSpellLevel(level);
 
-  const chargesMaxBase = getChargesMaxBase(fruitType, level);
+  const chargesMaxBase = getChargesMaxBaseForActor(actor, fruitType, level);
+
   const chargesMax = Math.max(0, chargesMaxBase + bonusCharges);
-  const showCharges = fruitType !== "zoan";
+
+  const showCharges = true;
 
   const storedCurrent = actor.getFlag(MODULE_ID, "chargesCurrent");
   const chargesCurrentRaw = Number.isFinite(Number(storedCurrent)) ? Number(storedCurrent) : chargesMax;
-  const chargesCurrent = showCharges ? clamp(chargesCurrentRaw, 0, chargesMax) : 0;
+  const chargesCurrent = clamp(chargesCurrentRaw, 0, chargesMax);
   const chargePct = showCharges && chargesMax > 0 ? (chargesCurrent / chargesMax) * 100 : 0;
 
   const df = getDfItems(actor).map((i) => ({
@@ -254,15 +309,11 @@ function wireTabInteractions(rootEl, actor) {
       const nextType = ev.target?.value ?? "paramecia";
       await actor.setFlag(MODULE_ID, "fruitType", nextType);
 
-      if (nextType === "zoan") {
-        await actor.setFlag(MODULE_ID, "chargesCurrent", 0);
-      } else {
-        const level = getActorLevel(actor);
-        const bonus = Number(actor.getFlag(MODULE_ID, "bonusCharges") ?? 0);
-        const max = Math.max(0, getChargesMaxBase(nextType, level) + bonus);
-        const cur = getChargesCurrent(actor, max);
-        await actor.setFlag(MODULE_ID, "chargesCurrent", clamp(cur, 0, max));
-      }
+      const level = getActorLevel(actor);
+      const bonus = Number(actor.getFlag(MODULE_ID, "bonusCharges") ?? 0);
+      const max = Math.max(0, getChargesMaxBaseForActor(actor, nextType, level) + bonus);
+      const cur = getChargesCurrent(actor, max);
+      await actor.setFlag(MODULE_ID, "chargesCurrent", clamp(cur, 0, max));
 
       rerenderAllActorSheets(actor);
     });
@@ -311,13 +362,17 @@ function wireTabInteractions(rootEl, actor) {
       await actor.setFlag(MODULE_ID, "bonusCharges", next);
 
       const type = actor.getFlag(MODULE_ID, "fruitType") ?? "paramecia";
-      if (type !== "zoan") {
-        const level = getActorLevel(actor);
-        const max = Math.max(0, getChargesMaxBase(type, level) + Number(next));
-        const cur = getChargesCurrent(actor, max);
-        await actor.setFlag(MODULE_ID, "chargesCurrent", clamp(cur, 0, max));
-      }
+      const level = getActorLevel(actor);
 
+      const prevMax = Math.max(0, getChargesMaxBaseForActor(actor, type, level) + Number(current));
+      const nextMax = Math.max(0, getChargesMaxBaseForActor(actor, type, level) + Number(next));
+
+      let cur = getChargesCurrent(actor, nextMax);
+
+      // Zoan: if it went from 0 max to >0 max, fill it.
+      if (type === "zoan" && prevMax <= 0 && nextMax > 0) cur = nextMax;
+
+      await actor.setFlag(MODULE_ID, "chargesCurrent", clamp(cur, 0, nextMax));
       rerenderAllActorSheets(actor);
     });
   }
@@ -451,7 +506,6 @@ async function handleItemDrop(event, actor) {
 
   const [created] = await actor.createEmbeddedDocuments("Item", [createData]);
 
-  // Charges config
   const fruitType = actor.getFlag(MODULE_ID, "fruitType") ?? "paramecia";
   if (fruitType !== "zoan") {
     const cfg = await promptItemChargeConfig(created, actor, null);
@@ -466,9 +520,8 @@ async function handleItemDrop(event, actor) {
     await created.setFlag(MODULE_ID, "upcastCost", 0);
   }
 
-  // AUTO APPLY formulas to activities
   const castingStat = actor.getFlag(MODULE_ID, "castingStat") ?? "cha";
-  await applyDfStatToItemActivities(created, castingStat);
+  await applyDfStatToItemActivities(created, castingStat, actor);
   await actor.setFlag(MODULE_ID, "lastAppliedCastingStat", castingStat);
 
   rerenderAllActorSheets(actor);
@@ -477,7 +530,11 @@ async function handleItemDrop(event, actor) {
 
 async function useDevilFruitItem(actor, item) {
   const fruitType = actor.getFlag(MODULE_ID, "fruitType") ?? "paramecia";
-  const showCharges = fruitType !== "zoan";
+
+  const levelForMax = getActorLevel(actor);
+  const bonusForMax = Number(actor.getFlag(MODULE_ID, "bonusCharges") ?? 0);
+  const maxForMax = Math.max(0, getChargesMaxBaseForActor(actor, fruitType, levelForMax) + bonusForMax);
+  const showCharges = maxForMax > 0;
 
   let slotLevel = null;
   let totalCost = Number(item.getFlag(MODULE_ID, "chargeCost") ?? 0);
@@ -501,8 +558,7 @@ async function useDevilFruitItem(actor, item) {
       }
     }
 
-    const bonus = Number(actor.getFlag(MODULE_ID, "bonusCharges") ?? 0);
-    const max = Math.max(0, getChargesMaxBase(fruitType, getActorLevel(actor)) + bonus);
+    const max = maxForMax;
     const cur = getChargesCurrent(actor, max);
 
     if (totalCost > cur) {
@@ -526,11 +582,13 @@ async function useDevilFruitItem(actor, item) {
 
 async function adjustCharges(actor, delta) {
   const fruitType = actor.getFlag(MODULE_ID, "fruitType") ?? "paramecia";
-  if (fruitType === "zoan") return;
 
   const level = getActorLevel(actor);
   const bonus = Number(actor.getFlag(MODULE_ID, "bonusCharges") ?? 0);
-  const max = Math.max(0, getChargesMaxBase(fruitType, level) + bonus);
+  const max = Math.max(0, getChargesMaxBaseForActor(actor, fruitType, level) + bonus);
+
+  if (max <= 0) return;
+
   const cur = getChargesCurrent(actor, max);
 
   await actor.setFlag(MODULE_ID, "chargesCurrent", clamp(cur + delta, 0, max));
@@ -539,11 +597,12 @@ async function adjustCharges(actor, delta) {
 
 async function refillCharges(actor) {
   const fruitType = actor.getFlag(MODULE_ID, "fruitType") ?? "paramecia";
-  if (fruitType === "zoan") return;
 
   const level = getActorLevel(actor);
   const bonus = Number(actor.getFlag(MODULE_ID, "bonusCharges") ?? 0);
-  const max = Math.max(0, getChargesMaxBase(fruitType, level) + bonus);
+  const max = Math.max(0, getChargesMaxBaseForActor(actor, fruitType, level) + bonus);
+
+  if (max <= 0) return;
 
   await actor.setFlag(MODULE_ID, "chargesCurrent", max);
   rerenderAllActorSheets(actor);
@@ -554,18 +613,28 @@ function halfUpFormula(varPath) {
   return `floor((${varPath} + 1) / 2)`;
 }
 
-function getDfFormulasForStat(stat) {
+function getDfFormulasForStat(stat, actor) {
   if (stat === "willpower") {
+    // ✅ NPC willpower uses CR/2 up min 1 (baked as constants for reliability)
+    if (actor?.type === "npc") {
+      const half = getNpcCrHalfUpMin1(actor);
+      return {
+        dcFormula: `10 + ${half}`,
+        atkFormula: `8 + ${half}`
+      };
+    }
+
+    // default willpower formula (characters/vehicles)
     const halfUp = halfUpFormula("@willpower.total");
     return {
       dcFormula: `10 + ${halfUp}`,
-      atkFormula: `8 + ${halfUp}`
+      atkFormula: `2 + ${halfUp}`
     };
   }
 
   return {
     dcFormula: `10 + @prof + @abilities.${stat}.mod`,
-    atkFormula: `8 + @prof + @abilities.${stat}.mod`
+    atkFormula: `2 + @prof + @abilities.${stat}.mod`
   };
 }
 
@@ -576,8 +645,8 @@ function listActivityIds(item) {
   return [];
 }
 
-async function applyDfStatToItemActivities(item, castingStat) {
-  const { dcFormula, atkFormula } = getDfFormulasForStat(castingStat);
+async function applyDfStatToItemActivities(item, castingStat, actor) {
+  const { dcFormula, atkFormula } = getDfFormulasForStat(castingStat, actor);
   const ids = listActivityIds(item);
   if (!ids.length) return;
 
@@ -586,20 +655,15 @@ async function applyDfStatToItemActivities(item, castingStat) {
   for (const id of ids) {
     const base = `system.activities.${id}`;
 
-    // SAVE DC (seen in your Fireball export)
-    // system.activities.<id>.save.dc.calculation + .formula :contentReference[oaicite:2]{index=2}
     if (foundry.utils.hasProperty(item, `${base}.save.dc`)) {
       foundry.utils.setProperty(update, `${base}.save.dc.calculation`, "formula");
       foundry.utils.setProperty(update, `${base}.save.dc.formula`, dcFormula);
     }
 
-    // ATTACK (we set flat-to-hit + bonus formula)
-    // weapon export includes attack.flat :contentReference[oaicite:3]{index=3}
     if (foundry.utils.hasProperty(item, `${base}.attack`)) {
-      // These keys may not exist until changed in UI; it's OK to create them.
-      foundry.utils.setProperty(update, `${base}.attack.flat`, true);        // Flat To Hit checkbox
-      foundry.utils.setProperty(update, `${base}.attack.ability`, "none");  // Attack Ability = None
-      foundry.utils.setProperty(update, `${base}.attack.bonus`, atkFormula); // To Hit Bonus field
+      foundry.utils.setProperty(update, `${base}.attack.flat`, true);
+      foundry.utils.setProperty(update, `${base}.attack.ability`, "none");
+      foundry.utils.setProperty(update, `${base}.attack.bonus`, atkFormula);
     }
   }
 
@@ -615,7 +679,7 @@ async function applyDfStatToItemActivities(item, castingStat) {
 async function applyDfStatToAllDfItems(actor, castingStat) {
   const df = getDfItems(actor);
   for (const item of df) {
-    await applyDfStatToItemActivities(item, castingStat);
+    await applyDfStatToItemActivities(item, castingStat, actor);
   }
 }
 
@@ -776,19 +840,27 @@ function getWillpowerTotal(actor) {
 }
 
 function computeFruitCastingStats(actor, castingStat) {
+  // ✅ NPC willpower uses CR/2 up min 1, ignoring prof/ability
+  if (castingStat === "willpower" && actor?.type === "npc") {
+    const half = getNpcCrHalfUpMin1(actor);
+    const saveDC = 10 + half;
+    const attackMod = 2 + half;
+    return { saveDC, attackMod, attackModSigned: formatSigned(attackMod) };
+  }
+
   const prof = Number(actor?.system?.attributes?.prof ?? 0) || 0;
 
   if (castingStat === "willpower") {
     const wp = getWillpowerTotal(actor);
     const halfUp = Math.floor((wp + 1) / 2);
     const saveDC = 10 + halfUp;
-    const attackMod = 8 + halfUp;
+    const attackMod = 2 + halfUp;
     return { saveDC, attackMod, attackModSigned: formatSigned(attackMod) };
   }
 
   const mod = Number(actor?.system?.abilities?.[castingStat]?.mod ?? 0) || 0;
   const saveDC = 10 + prof + mod;
-  const attackMod = 8 + prof + mod;
+  const attackMod = 2 + prof + mod;
   return { saveDC, attackMod, attackModSigned: formatSigned(attackMod) };
 }
 
