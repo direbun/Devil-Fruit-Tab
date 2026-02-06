@@ -6,19 +6,56 @@ const ICON_PATH = `/modules/${MODULE_ID}/assets/apple.webp`;
 const PARAMECIA_MAX = [0, 2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
 const LOGIA_MAX     = [0, 2, 2, 3, 3, 4, 4, 5, 6, 7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18];
 
+const SPELL_POINTS_BY_LEVEL = {
+  1: 4,  2: 6,  3: 14,  4: 17,  5: 27,
+  6: 32, 7: 38, 8: 44, 9: 57, 10: 64,
+  11: 73, 12: 73, 13: 83, 14: 83, 15: 94,
+  16: 94, 17: 107, 18: 114, 19: 123, 20: 133
+};
+
+const _lastLongRefillAt = new Map(); // key: actor.uuid, value: ms timestamp
+function shouldDebounceLongRefill(actor) {
+  const now = Date.now();
+  const last = _lastLongRefillAt.get(actor.uuid) ?? 0;
+  if (now - last < 800) return true;
+  _lastLongRefillAt.set(actor.uuid, now);
+  return false;
+}
+
 Hooks.once("init", async () => {
   await loadTemplates([TEMPLATE_PATH]);
   if (!Handlebars.helpers.eq) Handlebars.registerHelper("eq", (a, b) => a === b);
   injectRuntimeCssOnce();
+
+  game.settings.register(MODULE_ID, "useAlternativeFruitCharges", {
+    name: "Direbunny20 Alternative Fruit Charges",
+    hint: "If enabled: Max charges use Spell Points by Level (Logia uses level, Paramecia/Haki Purist uses ceil(level/2), Zoan uses ceil(level/3)). Long rest regains charges based on fruit type. No short rest regain.",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: false
+  });
 });
 
 Hooks.on("dnd5e.restCompleted", async (actor, data) => {
   if (!actor) return;
-  const isLong = data?.restType === "long" || data?.longRest === true || data?.long === true;
-  if (isLong) await refillCharges(actor);
+
+  const isLong =
+    data?.restType === "long" ||
+    data?.longRest === true ||
+    data?.long === true;
+
+  if (!isLong) return;
+  if (shouldDebounceLongRefill(actor)) return;
+
+  await refillCharges(actor);
 });
+
 Hooks.on("dnd5e.longRest", async (actor) => {
-  if (actor) await refillCharges(actor);
+  if (!actor) return;
+  if (shouldDebounceLongRefill(actor)) return;
+
+  await refillCharges(actor);
 });
 
 Hooks.once("tidy5e-sheet.ready", (api) => {
@@ -207,12 +244,55 @@ function getNpcDevilFruitChargesByCR(actor) {
   return 24;
 }
 
+function isAltChargesEnabled() {
+  return game.settings.get(MODULE_ID, "useAlternativeFruitCharges") === true;
+}
+
+function getSpellPointsForLevel(level) {
+  const lvl = clamp(Math.floor(level), 1, 20);
+  return SPELL_POINTS_BY_LEVEL[lvl] ?? 0;
+}
+
+function getAltMaxCharges(type, level) {
+  const lvl = clamp(Math.floor(level), 1, 20);
+
+  let effectiveLevel = lvl;
+
+  if (type === "paramecia" || type === "hakiPurist") effectiveLevel = Math.ceil(lvl / 2);
+
+  if (type === "zoan") effectiveLevel = Math.ceil(lvl / 3);
+
+  return getSpellPointsForLevel(effectiveLevel);
+}
+
+function getHighestSpellLevelByFruit(type, level) {
+  const lvl = clamp(Math.floor(level), 1, 20);
+
+  if (type === "logia") {
+    return Math.min(9, Math.floor((lvl + 1) / 2));
+  }
+
+  if (type === "paramecia" || type === "hakiPurist") {
+    return Math.min(5, Math.floor((lvl - 1) / 4) + 1);
+  }
+
+  if (type === "zoan") {
+    return Math.min(4, Math.floor((lvl - 1) / 6) + 1);
+  }
+
+  return Math.min(5, Math.floor((lvl - 1) / 4) + 1);
+}
+
 function getChargesMaxBaseForActor(actor, type, level) {
-  // NPCs use CR table for charges (except Zoan still base 0)
   if (actor?.type === "npc") {
     if (type === "zoan") return 0;
     return getNpcDevilFruitChargesByCR(actor);
   }
+
+  if (isAltChargesEnabled()) {
+    return getAltMaxCharges(type, level);
+  }
+
   return getChargesMaxBase(type, level);
 }
 
@@ -227,7 +307,7 @@ function buildTemplateData(actor) {
     computeFruitCastingStats(actor, castingStat);
 
   const level = getActorLevel(actor);
-  const highestSpellLevel = getHighestSpellLevel(level);
+  const highestSpellLevel = getHighestSpellLevelByFruit(fruitType, level);
 
   const chargesMaxBase = getChargesMaxBaseForActor(actor, fruitType, level);
 
@@ -284,7 +364,6 @@ function buildTemplateData(actor) {
 function wireTabInteractions(rootEl, actor) {
   if (!rootEl || !actor) return;
 
-  // One-time auto-sync DF items to current dropdown on first render
   if (!rootEl.dataset.dftAutosynced) {
     rootEl.dataset.dftAutosynced = "1";
     queueMicrotask(async () => {
@@ -541,7 +620,7 @@ async function useDevilFruitItem(actor, item) {
 
   if (showCharges) {
     const level = getActorLevel(actor);
-    const highestSpellLevel = getHighestSpellLevel(level);
+    const highestSpellLevel = getHighestSpellLevelByFruit(fruitType, level);
 
     if (item.type === "spell") {
       const baseSpellLevel = Number(item.system?.level ?? item.system?.spellLevel ?? 0);
@@ -604,7 +683,22 @@ async function refillCharges(actor) {
 
   if (max <= 0) return;
 
-  await actor.setFlag(MODULE_ID, "chargesCurrent", max);
+  // Standard: full refill
+  if (!isAltChargesEnabled()) {
+    await actor.setFlag(MODULE_ID, "chargesCurrent", max);
+    rerenderAllActorSheets(actor);
+    return;
+  }
+
+  // Alternative: regain per long rest
+  let regain = 0;
+  if (fruitType === "logia") regain = level;
+  else if (fruitType === "paramecia" || fruitType === "hakiPurist") regain = Math.ceil(level / 2);
+  else if (fruitType === "zoan") regain = Math.ceil(level / 3);
+  else regain = Math.ceil(level / 2);
+
+  const cur = getChargesCurrent(actor, max);
+  await actor.setFlag(MODULE_ID, "chargesCurrent", clamp(cur + regain, 0, max));
   rerenderAllActorSheets(actor);
 }
 
@@ -615,7 +709,6 @@ function halfUpFormula(varPath) {
 
 function getDfFormulasForStat(stat, actor) {
   if (stat === "willpower") {
-    // ✅ NPC willpower uses CR/2 up min 1 (baked as constants for reliability)
     if (actor?.type === "npc") {
       const half = getNpcCrHalfUpMin1(actor);
       return {
@@ -840,7 +933,6 @@ function getWillpowerTotal(actor) {
 }
 
 function computeFruitCastingStats(actor, castingStat) {
-  // ✅ NPC willpower uses CR/2 up min 1, ignoring prof/ability
   if (castingStat === "willpower" && actor?.type === "npc") {
     const half = getNpcCrHalfUpMin1(actor);
     const saveDC = 10 + half;
@@ -914,6 +1006,7 @@ function getActorLevel(actor) {
   return sum > 0 ? sum : 1;
 }
 
+// (kept for compatibility; not used for display anymore)
 function getHighestSpellLevel(level) {
   return Math.min(9, Math.floor((level + 1) / 2));
 }
@@ -922,6 +1015,7 @@ function getChargesMaxBase(type, level) {
   const lvl = clamp(Math.floor(level), 1, 20);
   if (type === "logia") return LOGIA_MAX[lvl] ?? 0;
   if (type === "zoan") return 0;
+  // Paramecia + Haki Purist share base table
   return PARAMECIA_MAX[lvl] ?? 0;
 }
 
@@ -963,4 +1057,3 @@ function getDragEventDataSafe(event) {
     return null;
   }
 }
-
