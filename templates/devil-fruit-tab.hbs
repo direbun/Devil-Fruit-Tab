@@ -1,11 +1,15 @@
-<section class="dft-root">
-  <header class="dft-fruit" data-dft-drop="fruit" title="GM: drop an Image Journal Page here to set the fruit image/name">
+<section class="dft-root" data-dft-mode="{{mode}}">
+  <header class="dft-fruit" data-dft-drop="power" title="GM: drop an Image Journal Page here to set the image/name">
     <div class="dft-fruit-left">
       {{#if fruitImg}}
         <img class="dft-fruit-img" src="{{fruitImg}}" alt="{{fruitName}}" />
       {{else}}
         <div class="dft-fruit-img-fallback">
-          <i class="fa-solid fa-apple-whole"></i>
+          {{#if (eq mode "haki")}}
+            <i class="fa-solid fa-shield-halved"></i>
+          {{else}}
+            <i class="fa-solid fa-apple-whole"></i>
+          {{/if}}
         </div>
       {{/if}}
     </div>
@@ -17,10 +21,14 @@
         <label class="dft-label">
           Type
           <select class="dft-select" data-action="set-type">
-            <option value="paramecia" {{#if (eq fruitType "paramecia")}}selected{{/if}}>Paramecia</option>
-            <option value="logia" {{#if (eq fruitType "logia")}}selected{{/if}}>Logia</option>
-            <option value="zoan" {{#if (eq fruitType "zoan")}}selected{{/if}}>Zoan</option>
-            <option value="hakiPurist" {{#if (eq fruitType "hakiPurist")}}selected{{/if}}>Haki Purist</option>
+            {{#if (eq mode "haki")}}
+              <option value="haki" {{#if (eq fruitType "haki")}}selected{{/if}}>Haki</option>
+              <option value="hakiPurist" {{#if (eq fruitType "hakiPurist")}}selected{{/if}}>Haki Purist</option>
+            {{else}}
+              <option value="paramecia" {{#if (eq fruitType "paramecia")}}selected{{/if}}>Paramecia</option>
+              <option value="logia" {{#if (eq fruitType "logia")}}selected{{/if}}>Logia</option>
+              <option value="zoan" {{#if (eq fruitType "zoan")}}selected{{/if}}>Zoan</option>
+            {{/if}}
           </select>
         </label>
 
@@ -38,220 +46,142 @@
         </label>
 
         <div class="dft-small">
-          Save DC: <b>{{fruitSaveDC}}</b> • Attack: <b>{{fruitAttackModSigned}}</b>
+          Save DC: <strong>{{fruitSaveDC}}</strong>
           <span class="dft-dot">•</span>
-          Highest Spell Level: <b>{{highestSpellLevel}}</b>
+          Attack: <strong>{{fruitAttackModSigned}}</strong>
+          <span class="dft-dot">•</span>
+          Max Spell Level: <strong>{{highestSpellLevel}}</strong>
         </div>
       </div>
     </div>
 
-    <div class="dft-fruit-right">
+    <div class="dft-fruit-right dft-charges">
       {{#if showCharges}}
-        <div class="dft-charges">
-          <div class="dft-charge-top">
-            <div class="dft-charge-text">
-              Charges: <b>{{chargesCurrent}}</b> / <b>{{chargesMax}}</b>
-              {{#if bonusCharges}}
-                <span class="dft-muted">(bonus {{bonusCharges}})</span>
-              {{/if}}
-            </div>
-
-            <div class="dft-charge-buttons">
-              <button type="button" class="dft-btn dft-btn-small" data-action="charge-minus" title="Spend 1 charge">
-                <i class="fa-solid fa-minus"></i>
-              </button>
-              <button type="button" class="dft-btn dft-btn-small" data-action="charge-plus" title="Regain 1 charge">
-                <i class="fa-solid fa-plus"></i>
-              </button>
-              <button type="button" class="dft-btn dft-btn-small" data-action="charge-bonus" title="Set bonus charges">
-                <i class="fa-solid fa-wand-magic-sparkles"></i>
-              </button>
-            </div>
+        <div class="dft-charge-top">
+          <div class="dft-charge-text">
+            Charges: <strong>{{chargesCurrent}}</strong> / <strong>{{chargesMax}}</strong>
+            <span class="dft-bonus">(bonus {{bonusCharges}})</span>
           </div>
 
-          <div class="dft-charge-bar" aria-label="Charges">
-            <div class="dft-charge-fill" style="width: {{chargePct}}%;"></div>
+          <div class="dft-charge-buttons">
+            <button class="dft-icon-btn" type="button" data-action="charge-minus" title="Spend 1 charge">
+              <i class="fa-solid fa-minus"></i>
+            </button>
+            <button class="dft-icon-btn" type="button" data-action="charge-plus" title="Gain 1 charge">
+              <i class="fa-solid fa-plus"></i>
+            </button>
+            <button class="dft-icon-btn" type="button" data-action="charge-bonus" title="Set bonus charges">
+              <i class="fa-solid fa-screwdriver-wrench"></i>
+            </button>
           </div>
         </div>
+
+        <div class="dft-charge-bar" aria-hidden="true">
+          <div class="dft-charge-fill" style="width: {{chargePct}}%"></div>
+        </div>
+
+        {{#if (eq fruitType "zoan")}}
+          <div class="dft-zoan-note"><em>Zoan uses no charges by default (unless using Alternative Charges).</em></div>
+        {{/if}}
+        {{#if (eq fruitType "haki")}}
+          <div class="dft-zoan-note"><em>Haki follows Zoan charge rules.</em></div>
+        {{/if}}
+      {{else}}
+        <div class="dft-zoan-note"><em>No charge pool for this type.</em></div>
       {{/if}}
     </div>
   </header>
 
-  <section class="dft-items">
-    <header class="dft-items-head">
-      <div class="dft-items-title">Devil Fruit Items</div>
-      <div class="dft-items-hint dft-muted">Drop items here to add them (spells, features, weapons, etc).</div>
-    </header>
-
-    <div class="dft-dropzone" data-dft-drop="items">
-      <div class="dft-dropzone-inner">
-        <i class="fa-solid fa-hand-pointer"></i>
-        <span>Drop items here</span>
+  <div class="dft-dropzone" data-dft-drop="items">
+    <div class="dft-dropzone-inner">
+      Drop Items here to add them to this tab.
+      <div class="dft-small">
+        They will be hidden from the default sheet item lists.
       </div>
     </div>
+  </div>
 
-    {{#if hasAny}}
-
-      {{#if spells.length}}
-        <section class="dft-group">
-          <header class="dft-group-head">
-            <div class="dft-group-title">Spells</div>
-          </header>
-
-          <ul class="dft-list">
-            {{#each spells}}
-              <li class="dft-item" data-item-uuid="{{uuid}}">
-                <img class="dft-item-img" src="{{img}}" alt="{{name}}" />
-
-                <div class="dft-item-main">
-                  <div class="dft-item-name">{{name}}</div>
-                  <div class="dft-item-sub dft-muted">
-                    Spell • Base level {{spellLevel}} • Cost {{chargeCost}}
-                    {{#if allowUpcast}}
-                      • Upcast +{{upcastCost}}/lvl
-                    {{/if}}
-                  </div>
-                </div>
-
-                <div class="dft-item-actions">
-                  <button type="button" class="dft-btn dft-btn-small" data-action="use" title="Use item">
-                    <i class="fa-solid fa-bolt"></i>
-                  </button>
-                  <button type="button" class="dft-btn dft-btn-small" data-action="open" title="Open sheet">
-                    <i class="fa-solid fa-up-right-from-square"></i>
-                  </button>
-                  <button type="button" class="dft-btn dft-btn-small" data-action="edit" title="Configure charge cost">
-                    <i class="fa-solid fa-gear"></i>
-                  </button>
-                  <button type="button" class="dft-btn dft-btn-small" data-action="remove" title="Remove from actor">
-                    <i class="fa-solid fa-trash"></i>
-                  </button>
-                </div>
-              </li>
-            {{/each}}
-          </ul>
-        </section>
-      {{/if}}
-
-      {{#if attacks.length}}
-        <section class="dft-group">
-          <header class="dft-group-head">
-            <div class="dft-group-title">Attacks</div>
-          </header>
-
-          <ul class="dft-list">
-            {{#each attacks}}
-              <li class="dft-item" data-item-uuid="{{uuid}}">
-                <img class="dft-item-img" src="{{img}}" alt="{{name}}" />
-
-                <div class="dft-item-main">
-                  <div class="dft-item-name">{{name}}</div>
-                  <div class="dft-item-sub dft-muted">
-                    Weapon • Cost {{chargeCost}}
-                  </div>
-                </div>
-
-                <div class="dft-item-actions">
-                  <button type="button" class="dft-btn dft-btn-small" data-action="use" title="Use item">
-                    <i class="fa-solid fa-bolt"></i>
-                  </button>
-                  <button type="button" class="dft-btn dft-btn-small" data-action="open" title="Open sheet">
-                    <i class="fa-solid fa-up-right-from-square"></i>
-                  </button>
-                  <button type="button" class="dft-btn dft-btn-small" data-action="edit" title="Configure charge cost">
-                    <i class="fa-solid fa-gear"></i>
-                  </button>
-                  <button type="button" class="dft-btn dft-btn-small" data-action="remove" title="Remove from actor">
-                    <i class="fa-solid fa-trash"></i>
-                  </button>
-                </div>
-              </li>
-            {{/each}}
-          </ul>
-        </section>
-      {{/if}}
-
-      {{#if features.length}}
-        <section class="dft-group">
-          <header class="dft-group-head">
-            <div class="dft-group-title">Features</div>
-          </header>
-
-          <ul class="dft-list">
-            {{#each features}}
-              <li class="dft-item" data-item-uuid="{{uuid}}">
-                <img class="dft-item-img" src="{{img}}" alt="{{name}}" />
-
-                <div class="dft-item-main">
-                  <div class="dft-item-name">{{name}}</div>
-                  <div class="dft-item-sub dft-muted">
-                    Feature • Cost {{chargeCost}}
-                  </div>
-                </div>
-
-                <div class="dft-item-actions">
-                  <button type="button" class="dft-btn dft-btn-small" data-action="use" title="Use item">
-                    <i class="fa-solid fa-bolt"></i>
-                  </button>
-                  <button type="button" class="dft-btn dft-btn-small" data-action="open" title="Open sheet">
-                    <i class="fa-solid fa-up-right-from-square"></i>
-                  </button>
-                  <button type="button" class="dft-btn dft-btn-small" data-action="edit" title="Configure charge cost">
-                    <i class="fa-solid fa-gear"></i>
-                  </button>
-                  <button type="button" class="dft-btn dft-btn-small" data-action="remove" title="Remove from actor">
-                    <i class="fa-solid fa-trash"></i>
-                  </button>
-                </div>
-              </li>
-            {{/each}}
-          </ul>
-        </section>
-      {{/if}}
-
-      {{#if other.length}}
-        <section class="dft-group">
-          <header class="dft-group-head">
-            <div class="dft-group-title">Other</div>
-          </header>
-
-          <ul class="dft-list">
-            {{#each other}}
-              <li class="dft-item" data-item-uuid="{{uuid}}">
-                <img class="dft-item-img" src="{{img}}" alt="{{name}}" />
-
-                <div class="dft-item-main">
-                  <div class="dft-item-name">{{name}}</div>
-                  <div class="dft-item-sub dft-muted">
-                    {{type}} • Cost {{chargeCost}}
-                  </div>
-                </div>
-
-                <div class="dft-item-actions">
-                  <button type="button" class="dft-btn dft-btn-small" data-action="use" title="Use item">
-                    <i class="fa-solid fa-bolt"></i>
-                  </button>
-                  <button type="button" class="dft-btn dft-btn-small" data-action="open" title="Open sheet">
-                    <i class="fa-solid fa-up-right-from-square"></i>
-                  </button>
-                  <button type="button" class="dft-btn dft-btn-small" data-action="edit" title="Configure charge cost">
-                    <i class="fa-solid fa-gear"></i>
-                  </button>
-                  <button type="button" class="dft-btn dft-btn-small" data-action="remove" title="Remove from actor">
-                    <i class="fa-solid fa-trash"></i>
-                  </button>
-                </div>
-              </li>
-            {{/each}}
-          </ul>
-        </section>
-      {{/if}}
-
-    {{else}}
-      <div class="dft-empty">
-        <i class="fa-regular fa-folder-open"></i>
-        <div class="dft-empty-text">No Devil Fruit items yet.</div>
-      </div>
+  {{#if hasAny}}
+    {{#if spells.length}}
+      <h3 class="dft-group-title">Spells</h3>
+      <ul class="dft-list">
+        {{#each spells}}
+          <li class="dft-item" data-item-uuid="{{uuid}}">
+            <img class="dft-item-img" src="{{img}}" alt="{{name}}" data-action="open" />
+            <div class="dft-item-name" data-action="open">
+              {{name}}
+              {{#if chargeCost}}<span class="dft-cost">({{chargeCost}})</span>{{/if}}
+            </div>
+            <div class="dft-item-actions">
+              <button class="dft-item-btn" type="button" data-action="use" title="Use"><i class="fa-solid fa-bolt"></i></button>
+              <button class="dft-item-btn" type="button" data-action="edit" title="Config"><i class="fa-solid fa-gear"></i></button>
+              <button class="dft-item-btn" type="button" data-action="remove" title="Remove"><i class="fa-solid fa-trash"></i></button>
+            </div>
+          </li>
+        {{/each}}
+      </ul>
     {{/if}}
-  </section>
+
+    {{#if attacks.length}}
+      <h3 class="dft-group-title">Attacks</h3>
+      <ul class="dft-list">
+        {{#each attacks}}
+          <li class="dft-item" data-item-uuid="{{uuid}}">
+            <img class="dft-item-img" src="{{img}}" alt="{{name}}" data-action="open" />
+            <div class="dft-item-name" data-action="open">
+              {{name}}
+              {{#if chargeCost}}<span class="dft-cost">({{chargeCost}})</span>{{/if}}
+            </div>
+            <div class="dft-item-actions">
+              <button class="dft-item-btn" type="button" data-action="use" title="Use"><i class="fa-solid fa-bolt"></i></button>
+              <button class="dft-item-btn" type="button" data-action="edit" title="Config"><i class="fa-solid fa-gear"></i></button>
+              <button class="dft-item-btn" type="button" data-action="remove" title="Remove"><i class="fa-solid fa-trash"></i></button>
+            </div>
+          </li>
+        {{/each}}
+      </ul>
+    {{/if}}
+
+    {{#if features.length}}
+      <h3 class="dft-group-title">Features</h3>
+      <ul class="dft-list">
+        {{#each features}}
+          <li class="dft-item" data-item-uuid="{{uuid}}">
+            <img class="dft-item-img" src="{{img}}" alt="{{name}}" data-action="open" />
+            <div class="dft-item-name" data-action="open">
+              {{name}}
+              {{#if chargeCost}}<span class="dft-cost">({{chargeCost}})</span>{{/if}}
+            </div>
+            <div class="dft-item-actions">
+              <button class="dft-item-btn" type="button" data-action="use" title="Use"><i class="fa-solid fa-bolt"></i></button>
+              <button class="dft-item-btn" type="button" data-action="edit" title="Config"><i class="fa-solid fa-gear"></i></button>
+              <button class="dft-item-btn" type="button" data-action="remove" title="Remove"><i class="fa-solid fa-trash"></i></button>
+            </div>
+          </li>
+        {{/each}}
+      </ul>
+    {{/if}}
+
+    {{#if other.length}}
+      <h3 class="dft-group-title">Other</h3>
+      <ul class="dft-list">
+        {{#each other}}
+          <li class="dft-item" data-item-uuid="{{uuid}}">
+            <img class="dft-item-img" src="{{img}}" alt="{{name}}" data-action="open" />
+            <div class="dft-item-name" data-action="open">
+              {{name}}
+              {{#if chargeCost}}<span class="dft-cost">({{chargeCost}})</span>{{/if}}
+            </div>
+            <div class="dft-item-actions">
+              <button class="dft-item-btn" type="button" data-action="use" title="Use"><i class="fa-solid fa-bolt"></i></button>
+              <button class="dft-item-btn" type="button" data-action="edit" title="Config"><i class="fa-solid fa-gear"></i></button>
+              <button class="dft-item-btn" type="button" data-action="remove" title="Remove"><i class="fa-solid fa-trash"></i></button>
+            </div>
+          </li>
+        {{/each}}
+      </ul>
+    {{/if}}
+  {{else}}
+    <p class="dft-empty">No items yet. Drop spells/features/weapons into the drop zone above.</p>
+  {{/if}}
 </section>
