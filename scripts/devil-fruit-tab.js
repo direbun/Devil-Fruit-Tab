@@ -6,7 +6,7 @@ const TAB_ID_HAKI  = "devil-haki";
 const TEMPLATE_PATH = `/modules/${MODULE_ID}/templates/devil-fruit-tab.hbs`;
 
 const ICON_FRUIT = `/modules/${MODULE_ID}/assets/apple.webp`;
-const ICON_HAKI  = `/modules/${MODULE_ID}/assets/haki.webp`;
+const ICON_HAKI  = null;
 
 const PARAMECIA_MAX = [0, 2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
 const LOGIA_MAX     = [0, 2, 2, 3, 3, 4, 4, 5, 6, 7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18];
@@ -160,10 +160,15 @@ function makeCoreTabButton(nav, sheet, element, group, tabId, title, iconPath, p
   tabEl.dataset.action = "tab";
   tabEl.title = title;
 
-  tabEl.innerHTML = `
-    <img class="dft-tab-icon-img" src="${iconPath}" alt="" />
-    <span class="dft-sr-only">${title}</span>
-  `;
+  tabEl.innerHTML = iconPath
+    ? `
+      <img class="dft-tab-icon-img" src="${iconPath}" alt="" />
+      <span class="dft-sr-only">${title}</span>
+    `
+    : `
+      <i class="fa-solid fa-shield-halved dft-tab-icon-fa" aria-hidden="true"></i>
+      <span class="dft-sr-only">${title}</span>
+    `;
 
   if (!tabEl.dataset.dftBound) {
     tabEl.dataset.dftBound = "1";
@@ -315,11 +320,6 @@ function getHighestSpellLevelByType(type, level) {
 }
 
 function getChargesMaxBaseForActor(actor, type, level) {
-  if (actor?.type === "npc") {
-    if (type === "zoan" || type === "haki") return 0;
-    return getNpcDevilFruitChargesByCR(actor);
-  }
-
   if (isAltChargesEnabled()) {
     return getAltMaxCharges(type, level);
   }
@@ -336,7 +336,10 @@ function modeFlag(mode, key) {
       bonus: "bonusCharges",
       cur: "chargesCurrent",
       stat: "castingStat",
-      last: "lastAppliedCastingStat"
+      last: "lastAppliedCastingStat",
+      npcScaling: "fruitNpcScaling",
+      npcCasterLevel: "fruitNpcCasterLevel",
+      npcMaxSpellLevel: "fruitNpcMaxSpellLevel"
     }[key];
   }
 
@@ -347,8 +350,44 @@ function modeFlag(mode, key) {
     bonus: "hakiBonusCharges",
     cur: "hakiChargesCurrent",
     stat: "hakiCastingStat",
-    last: "hakiLastAppliedCastingStat"
+    last: "hakiLastAppliedCastingStat",
+    npcScaling: "hakiNpcScaling",
+    npcCasterLevel: "hakiNpcCasterLevel",
+    npcMaxSpellLevel: "hakiMaxSpellLevel"
   }[key];
+}
+
+// NPC scaling defaults on for NPC actors, but can be explicitly toggled per tab.
+function isNpcScalingEnabled(actor, mode) {
+  const stored = actor.getFlag(MODULE_ID, modeFlag(mode, "npcScaling"));
+  if (stored === undefined || stored === null) return actor?.type === "npc";
+  return Boolean(stored);
+}
+
+// Manual caster level wins; otherwise NPC scaling treats CR as an effective level.
+function getNpcEffectiveCasterLevel(actor, mode) {
+  const override = Number(actor.getFlag(MODULE_ID, modeFlag(mode, "npcCasterLevel")));
+  if (Number.isFinite(override) && override > 0) return clamp(Math.floor(override), 1, 20);
+
+  const cr = getActorCR(actor);
+  return clamp(Math.max(1, Math.ceil(cr)), 1, 20);
+}
+
+// Devil Fruit/Haki power scaling uses NPC CR/override only when the tab opts into it.
+function getEffectivePowerLevel(actor, mode) {
+  if (isNpcScalingEnabled(actor, mode)) return getNpcEffectiveCasterLevel(actor, mode);
+  return getActorLevel(actor);
+}
+
+// Manual spell-level caps apply only while NPC scaling is enabled for this tab.
+function getEffectiveHighestSpellLevel(actor, mode, type) {
+  const override = Number(actor.getFlag(MODULE_ID, modeFlag(mode, "npcMaxSpellLevel")));
+  if (isNpcScalingEnabled(actor, mode) && Number.isFinite(override) && override >= 0) {
+    return clamp(Math.floor(override), 0, 9);
+  }
+
+  const effectiveLevel = getEffectivePowerLevel(actor, mode);
+  return getHighestSpellLevelByType(type, effectiveLevel);
 }
 
 function buildTemplateData(actor, mode = "fruit") {
@@ -374,8 +413,8 @@ function buildTemplateData(actor, mode = "fruit") {
   const { saveDC: fruitSaveDC, attackModSigned: fruitAttackModSigned } =
     computeCastingStats(actor, castingStat);
 
-  const level = getActorLevel(actor);
-  const highestSpellLevel = getHighestSpellLevelByType(fruitType, level);
+  const level = getEffectivePowerLevel(actor, mode);
+  const highestSpellLevel = getEffectiveHighestSpellLevel(actor, mode, fruitType);
 
   const chargesMaxBase = getChargesMaxBaseForActor(actor, fruitType, level);
   const chargesMax = Math.max(0, chargesMaxBase + bonusCharges);
@@ -387,17 +426,26 @@ function buildTemplateData(actor, mode = "fruit") {
   const chargesCurrent = clamp(chargesCurrentRaw, 0, chargesMax);
   const chargePct = showCharges && chargesMax > 0 ? (chargesCurrent / chargesMax) * 100 : 0;
 
-  const managed = getManagedItems(actor, mode).map((i) => ({
-    uuid: i.uuid,
-    id: i.id,
-    name: i.name,
-    img: i.img,
-    type: i.type,
-    chargeCost: Number(i.getFlag(MODULE_ID, "chargeCost") ?? 0),
-    allowUpcast: Boolean(i.getFlag(MODULE_ID, "allowUpcast")),
-    upcastCost: Number(i.getFlag(MODULE_ID, "upcastCost") ?? 0),
-    spellLevel: Number(i.system?.level ?? i.system?.spellLevel ?? 0)
-  }));
+  const managed = getManagedItems(actor, mode).map((i) => {
+    const defaultMode = i.getFlag(MODULE_ID, "defaultCastLevelMode") ?? "ask";
+    const defaultCastLevelMode = ["ask", "base", "highest"].includes(defaultMode) ? defaultMode : "ask";
+    const baseSpellLevel = Number(i.system?.level ?? i.system?.spellLevel ?? 0);
+
+    return {
+      uuid: i.uuid,
+      id: i.id,
+      name: i.name,
+      img: i.img,
+      type: i.type,
+      chargeCost: Number(i.getFlag(MODULE_ID, "chargeCost") ?? 0),
+      allowUpcast: Boolean(i.getFlag(MODULE_ID, "allowUpcast")),
+      upcastCost: Number(i.getFlag(MODULE_ID, "upcastCost") ?? 0),
+      defaultCastLevelMode,
+      baseSpellLevel,
+      maxSpellLevel: highestSpellLevel,
+      spellLevel: baseSpellLevel
+    };
+  });
 
   const spells = managed.filter((i) => i.type === "spell");
   const attacks = managed.filter((i) => i.type === "weapon");
@@ -406,6 +454,8 @@ function buildTemplateData(actor, mode = "fruit") {
 
   return {
     mode,
+    isGM: game.user.isGM,
+    isNpcActor: actor.type === "npc",
 
     fruitType,
     fruitName,
@@ -415,6 +465,11 @@ function buildTemplateData(actor, mode = "fruit") {
     fruitSaveDC,
     fruitAttackModSigned,
     highestSpellLevel,
+    effectivePowerLevel: level,
+    npcScaling: isNpcScalingEnabled(actor, mode),
+    npcCasterLevel: actor.getFlag(MODULE_ID, modeFlag(mode, "npcCasterLevel")) ?? "",
+    npcMaxSpellLevel: actor.getFlag(MODULE_ID, modeFlag(mode, "npcMaxSpellLevel")) ?? "",
+    actorCR: getActorCR(actor),
 
     showCharges,
     chargesCurrent,
@@ -459,14 +514,7 @@ function wireTabInteractions(rootEl, actor, mode = "fruit") {
     typeSelect.addEventListener("change", async (ev) => {
       const nextType = ev.target?.value ?? (mode === "haki" ? "haki" : "paramecia");
       await actor.setFlag(MODULE_ID, modeFlag(mode, "type"), nextType);
-
-      const level = getActorLevel(actor);
-      const bonus = Number(actor.getFlag(MODULE_ID, modeFlag(mode, "bonus")) ?? 0);
-      const max = Math.max(0, getChargesMaxBaseForActor(actor, nextType, level) + bonus);
-
-      const cur = getChargesCurrentForMode(actor, mode, max);
-      await actor.setFlag(MODULE_ID, modeFlag(mode, "cur"), clamp(cur, 0, max));
-
+      await reconcileChargesForMode(actor, mode);
       rerenderAllActorSheets(actor);
     });
   }
@@ -481,6 +529,67 @@ function wireTabInteractions(rootEl, actor, mode = "fruit") {
       await applyCastingStatToAllManagedItems(actor, next, mode);
       await actor.setFlag(MODULE_ID, lastKey, next);
 
+      rerenderAllActorSheets(actor);
+    });
+  }
+
+  const requireGmNpcScalingChange = () => {
+    if (game.user.isGM) return true;
+    ui.notifications.warn("Only the GM can change NPC scaling.");
+    return false;
+  };
+
+  const npcScalingInput = rootEl.querySelector('[data-action="set-npc-scaling"]');
+  if (npcScalingInput && !npcScalingInput.dataset.dftWired) {
+    npcScalingInput.dataset.dftWired = "1";
+    npcScalingInput.addEventListener("change", async (ev) => {
+      if (!requireGmNpcScalingChange()) return;
+      await actor.setFlag(MODULE_ID, modeFlag(mode, "npcScaling"), Boolean(ev.target?.checked));
+      await reconcileChargesForMode(actor, mode);
+      rerenderAllActorSheets(actor);
+    });
+  }
+
+  const npcCasterLevelInput = rootEl.querySelector('[data-action="set-npc-caster-level"]');
+  if (npcCasterLevelInput && !npcCasterLevelInput.dataset.dftWired) {
+    npcCasterLevelInput.dataset.dftWired = "1";
+    npcCasterLevelInput.addEventListener("change", async (ev) => {
+      if (!requireGmNpcScalingChange()) return;
+
+      const raw = String(ev.target?.value ?? "").trim();
+      if (!raw) await actor.unsetFlag(MODULE_ID, modeFlag(mode, "npcCasterLevel"));
+      else {
+        const next = Number(raw);
+        if (!Number.isFinite(next)) {
+          ui.notifications.warn("Effective Level must be a number.");
+          return;
+        }
+        await actor.setFlag(MODULE_ID, modeFlag(mode, "npcCasterLevel"), clamp(Math.floor(next), 1, 20));
+      }
+
+      await reconcileChargesForMode(actor, mode);
+      rerenderAllActorSheets(actor);
+    });
+  }
+
+  const npcMaxSpellLevelInput = rootEl.querySelector('[data-action="set-npc-max-spell-level"]');
+  if (npcMaxSpellLevelInput && !npcMaxSpellLevelInput.dataset.dftWired) {
+    npcMaxSpellLevelInput.dataset.dftWired = "1";
+    npcMaxSpellLevelInput.addEventListener("change", async (ev) => {
+      if (!requireGmNpcScalingChange()) return;
+
+      const raw = String(ev.target?.value ?? "").trim();
+      if (!raw) await actor.unsetFlag(MODULE_ID, modeFlag(mode, "npcMaxSpellLevel"));
+      else {
+        const next = Number(raw);
+        if (!Number.isFinite(next)) {
+          ui.notifications.warn("Max Spell Level must be a number.");
+          return;
+        }
+        await actor.setFlag(MODULE_ID, modeFlag(mode, "npcMaxSpellLevel"), clamp(Math.floor(next), 0, 9));
+      }
+
+      await reconcileChargesForMode(actor, mode);
       rerenderAllActorSheets(actor);
     });
   }
@@ -514,7 +623,7 @@ function wireTabInteractions(rootEl, actor, mode = "fruit") {
       await actor.setFlag(MODULE_ID, modeFlag(mode, "bonus"), next);
 
       const type = actor.getFlag(MODULE_ID, modeFlag(mode, "type")) ?? (mode === "haki" ? "haki" : "paramecia");
-      const level = getActorLevel(actor);
+      const level = getEffectivePowerLevel(actor, mode);
 
       const prevMax = Math.max(0, getChargesMaxBaseForActor(actor, type, level) + Number(current));
       const nextMax = Math.max(0, getChargesMaxBaseForActor(actor, type, level) + Number(next));
@@ -525,6 +634,7 @@ function wireTabInteractions(rootEl, actor, mode = "fruit") {
       if ((type === "zoan" || type === "haki") && prevMax <= 0 && nextMax > 0) cur = nextMax;
 
       await actor.setFlag(MODULE_ID, modeFlag(mode, "cur"), clamp(cur, 0, nextMax));
+      await reconcileChargesForMode(actor, mode);
       rerenderAllActorSheets(actor);
     });
   }
@@ -549,7 +659,8 @@ function wireTabInteractions(rootEl, actor, mode = "fruit") {
         const current = {
           chargeCost: Number(item.getFlag(MODULE_ID, "chargeCost") ?? 0),
           allowUpcast: Boolean(item.getFlag(MODULE_ID, "allowUpcast")),
-          upcastCost: Number(item.getFlag(MODULE_ID, "upcastCost") ?? 0)
+          upcastCost: Number(item.getFlag(MODULE_ID, "upcastCost") ?? 0),
+          defaultCastLevelMode: item.getFlag(MODULE_ID, "defaultCastLevelMode") ?? "ask"
         };
         const updated = await promptItemChargeConfig(item, actor, current, mode);
         if (!updated) return;
@@ -557,6 +668,7 @@ function wireTabInteractions(rootEl, actor, mode = "fruit") {
         await item.setFlag(MODULE_ID, "chargeCost", updated.chargeCost);
         await item.setFlag(MODULE_ID, "allowUpcast", updated.allowUpcast);
         await item.setFlag(MODULE_ID, "upcastCost", updated.upcastCost);
+        await item.setFlag(MODULE_ID, "defaultCastLevelMode", updated.defaultCastLevelMode);
 
         rerenderAllActorSheets(actor);
         return;
@@ -672,11 +784,13 @@ async function handleItemDrop(event, actor, mode) {
       await created.setFlag(MODULE_ID, "chargeCost", cfg.chargeCost);
       await created.setFlag(MODULE_ID, "allowUpcast", cfg.allowUpcast);
       await created.setFlag(MODULE_ID, "upcastCost", cfg.upcastCost);
+      await created.setFlag(MODULE_ID, "defaultCastLevelMode", cfg.defaultCastLevelMode);
     }
   } else {
     await created.setFlag(MODULE_ID, "chargeCost", 0);
     await created.setFlag(MODULE_ID, "allowUpcast", false);
     await created.setFlag(MODULE_ID, "upcastCost", 0);
+    await created.setFlag(MODULE_ID, "defaultCastLevelMode", "ask");
   }
 
   const castingStat = actor.getFlag(MODULE_ID, modeFlag(mode, "stat")) ?? "cha";
@@ -692,49 +806,94 @@ async function usePowerItem(actor, item, mode) {
     actor.getFlag(MODULE_ID, modeFlag(mode, "type")) ??
     (mode === "haki" ? "haki" : "paramecia");
 
-  const levelForMax = getActorLevel(actor);
+  const levelForMax = getEffectivePowerLevel(actor, mode);
   const bonusForMax = Number(actor.getFlag(MODULE_ID, modeFlag(mode, "bonus")) ?? 0);
   const maxForMax = Math.max(0, getChargesMaxBaseForActor(actor, powerType, levelForMax) + bonusForMax);
   const showCharges = maxForMax > 0;
+  const currentCharges = showCharges
+    ? getChargesCurrentForMode(actor, mode, maxForMax)
+    : Number.POSITIVE_INFINITY;
 
   let slotLevel = null;
-  let totalCost = Number(item.getFlag(MODULE_ID, "chargeCost") ?? 0);
+  let baseSpellLevel = null;
+  const baseCost = Math.max(0, Math.floor(Number(item.getFlag(MODULE_ID, "chargeCost") ?? 0)));
+  let totalCost = baseCost;
 
-  if (showCharges) {
-    const level = getActorLevel(actor);
-    const highestSpellLevel = getHighestSpellLevelByType(powerType, level);
+  if (item.type === "spell") {
+    baseSpellLevel = Math.max(0, Math.floor(Number(item.system?.level ?? item.system?.spellLevel ?? 0)));
+    const highestSpellLevel = getEffectiveHighestSpellLevel(actor, mode, powerType);
+    const allowUpcast = Boolean(item.getFlag(MODULE_ID, "allowUpcast"));
+    const upcastCost = Math.max(0, Math.floor(Number(item.getFlag(MODULE_ID, "upcastCost") ?? 0)));
+    const storedDefault = item.getFlag(MODULE_ID, "defaultCastLevelMode") ?? "ask";
+    const defaultCastLevelMode = ["ask", "base", "highest"].includes(storedDefault) ? storedDefault : "ask";
+    const isUpcastable = allowUpcast && baseSpellLevel > 0 && highestSpellLevel > baseSpellLevel;
 
-    if (item.type === "spell") {
-      const baseSpellLevel = Number(item.system?.level ?? item.system?.spellLevel ?? 0);
-      const allowUpcast = Boolean(item.getFlag(MODULE_ID, "allowUpcast"));
-      const upcastCost = Number(item.getFlag(MODULE_ID, "upcastCost") ?? 0);
+    slotLevel = baseSpellLevel;
 
-      if (allowUpcast) {
-        const chosen = await promptSpellCastLevel(item.name, baseSpellLevel, highestSpellLevel);
+    if (isUpcastable) {
+      if (defaultCastLevelMode === "ask") {
+        const chosen = await promptSpellCastLevel(
+          item.name,
+          baseSpellLevel,
+          highestSpellLevel,
+          baseCost,
+          upcastCost,
+          currentCharges
+        );
         if (chosen === null) return;
         slotLevel = chosen;
-        totalCost = totalCost + Math.max(0, (slotLevel - baseSpellLevel)) * upcastCost;
-      } else {
-        slotLevel = baseSpellLevel;
+      } else if (defaultCastLevelMode === "highest") {
+        const chosen = getHighestAffordableSpellLevel(
+          baseSpellLevel,
+          highestSpellLevel,
+          baseCost,
+          upcastCost,
+          currentCharges
+        );
+        if (chosen === null) {
+          ui.notifications.warn("Not enough charges to cast this power.");
+          return;
+        }
+        slotLevel = chosen;
       }
+
+      totalCost = getSpellCastCost(slotLevel, baseSpellLevel, baseCost, upcastCost);
     }
+  }
 
-    const max = maxForMax;
-    const cur = getChargesCurrentForMode(actor, mode, max);
-
-    if (totalCost > cur) {
-      ui.notifications.warn(`Not enough charges. Need ${totalCost}, have ${cur}.`);
+  if (showCharges) {
+    if (totalCost > currentCharges) {
+      ui.notifications.warn(`Not enough charges. Need ${totalCost}, have ${currentCharges}.`);
       return;
     }
-
-    await actor.setFlag(MODULE_ID, modeFlag(mode, "cur"), clamp(cur - totalCost, 0, max));
-    rerenderAllActorSheets(actor);
   }
 
   try {
-    const opts = { configureDialog: true, consumeSpellSlot: false, consumeSlot: false };
-    if (slotLevel !== null) opts.slotLevel = slotLevel;
-    await item.use(opts);
+    const usageConfig = { consume: false };
+    const dialogConfig = {};
+
+    if (item.type === "spell") {
+      dialogConfig.configure = false;
+      if (slotLevel > 0) {
+        usageConfig.spell = { slot: `spell${slotLevel}` };
+        usageConfig.scaling = Math.max(0, slotLevel - (baseSpellLevel ?? slotLevel));
+      } else {
+        usageConfig.scaling = false;
+      }
+    }
+
+    const messageConfig = {};
+    if (item.type === "spell" && slotLevel > 0) {
+      foundry.utils.setProperty(messageConfig, "data.flags.dnd5e.use.spellLevel", slotLevel);
+    }
+
+    const result = await item.use(usageConfig, dialogConfig, messageConfig);
+    if (result === undefined) return;
+
+    if (showCharges) {
+      await actor.setFlag(MODULE_ID, modeFlag(mode, "cur"), clamp(currentCharges - totalCost, 0, maxForMax));
+      rerenderAllActorSheets(actor);
+    }
   } catch (e) {
     console.warn(`${MODULE_ID} | item.use failed, opening sheet instead`, e);
     item.sheet?.render(true);
@@ -746,7 +905,7 @@ async function adjustCharges(actor, delta, mode) {
     actor.getFlag(MODULE_ID, modeFlag(mode, "type")) ??
     (mode === "haki" ? "haki" : "paramecia");
 
-  const level = getActorLevel(actor);
+  const level = getEffectivePowerLevel(actor, mode);
   const bonus = Number(actor.getFlag(MODULE_ID, modeFlag(mode, "bonus")) ?? 0);
   const max = Math.max(0, getChargesMaxBaseForActor(actor, powerType, level) + bonus);
 
@@ -763,7 +922,7 @@ async function refillCharges(actor, mode) {
     actor.getFlag(MODULE_ID, modeFlag(mode, "type")) ??
     (mode === "haki" ? "haki" : "paramecia");
 
-  const level = getActorLevel(actor);
+  const level = getEffectivePowerLevel(actor, mode);
   const bonus = Number(actor.getFlag(MODULE_ID, modeFlag(mode, "bonus")) ?? 0);
   const max = Math.max(0, getChargesMaxBaseForActor(actor, powerType, level) + bonus);
 
@@ -870,6 +1029,8 @@ function promptItemChargeConfig(item, actor, existing, mode) {
   const chargeCost = existing ? Number(existing.chargeCost ?? 0) : 1;
   const allowUpcast = existing ? Boolean(existing.allowUpcast) : false;
   const upcastCost = existing ? Number(existing.upcastCost ?? 0) : 1;
+  const storedDefault = existing?.defaultCastLevelMode ?? "ask";
+  const defaultCastLevelMode = ["ask", "base", "highest"].includes(storedDefault) ? storedDefault : "ask";
 
   const content = `
     <form class="dft-form">
@@ -890,9 +1051,17 @@ function promptItemChargeConfig(item, actor, existing, mode) {
           <label>Upcast cost (per level upcast)</label>
           <input type="number" name="upcastCost" value="${upcastCost}" min="0" step="1"/>
         </div>
+        <div class="form-group">
+          <label>Default cast level</label>
+          <select name="defaultCastLevelMode">
+            <option value="ask" ${defaultCastLevelMode === "ask" ? "selected" : ""}>Ask each time</option>
+            <option value="base" ${defaultCastLevelMode === "base" ? "selected" : ""}>Base level</option>
+            <option value="highest" ${defaultCastLevelMode === "highest" ? "selected" : ""}>Highest available</option>
+          </select>
+        </div>
       ` : ``}
 
-      ${(powerType === "zoan" || powerType === "haki") ? `<p><em>Note: ${powerType === "haki" ? "Haki" : "Zoan"} doesn’t use charges by default (cost will be ignored).</em></p>` : ``}
+      ${(powerType === "zoan" || powerType === "haki") ? `<p><em>Note: ${powerType === "haki" ? "Haki" : "Zoan"} does not use charges by default (cost will be ignored).</em></p>` : ``}
     </form>
   `;
 
@@ -909,10 +1078,12 @@ function promptItemChargeConfig(item, actor, existing, mode) {
             const cc = Number(form.chargeCost.value ?? 0);
             const au = isSpell ? Boolean(form.allowUpcast.checked) : false;
             const uc = isSpell ? Number(form.upcastCost.value ?? 0) : 0;
+            const dm = isSpell ? form.defaultCastLevelMode.value : "ask";
             resolve({
               chargeCost: Math.max(0, Math.floor(cc)),
               allowUpcast: au,
-              upcastCost: Math.max(0, Math.floor(uc))
+              upcastCost: Math.max(0, Math.floor(uc)),
+              defaultCastLevelMode: ["ask", "base", "highest"].includes(dm) ? dm : "ask"
             });
           }
         },
@@ -928,13 +1099,39 @@ function promptItemChargeConfig(item, actor, existing, mode) {
   });
 }
 
-function promptSpellCastLevel(name, baseLevel, maxLevel) {
+function getSpellCastCost(level, baseLevel, baseCost, upcastCost) {
+  return baseCost + Math.max(0, level - baseLevel) * upcastCost;
+}
+
+function getHighestAffordableSpellLevel(baseLevel, maxLevel, baseCost, upcastCost, currentCharges) {
+  const min = Math.max(0, baseLevel);
+  const max = Math.max(min, maxLevel);
+
+  for (let lvl = max; lvl >= min; lvl--) {
+    if (getSpellCastCost(lvl, baseLevel, baseCost, upcastCost) <= currentCharges) return lvl;
+  }
+
+  return null;
+}
+
+function promptSpellCastLevel(name, baseLevel, maxLevel, baseCost, upcastCost, currentCharges) {
   const min = Math.max(0, baseLevel);
   const max = Math.max(min, maxLevel);
   if (min === 0) return Promise.resolve(0);
 
   const options = [];
-  for (let lvl = min; lvl <= max; lvl++) options.push(`<option value="${lvl}">Level ${lvl}</option>`);
+  let hasAffordable = false;
+  for (let lvl = min; lvl <= max; lvl++) {
+    const totalCost = getSpellCastCost(lvl, baseLevel, baseCost, upcastCost);
+    const disabled = totalCost > currentCharges;
+    if (!disabled) hasAffordable = true;
+    options.push(`<option value="${lvl}" ${disabled ? "disabled" : ""}>Level ${lvl} &mdash; Cost ${totalCost}</option>`);
+  }
+
+  if (!hasAffordable) {
+    ui.notifications.warn("Not enough charges to cast this power.");
+    return Promise.resolve(null);
+  }
 
   const content = `
     <form class="dft-form">
@@ -1050,6 +1247,7 @@ function injectRuntimeCssOnce() {
   style.textContent = `
     .dft-hidden-item { display: none !important; }
     .dft-tab-icon-img { width: 18px; height: 18px; object-fit: contain; vertical-align: middle; }
+    .dft-tab-icon-fa { font-size: 18px; line-height: 1; vertical-align: middle; }
     .dft-sr-only {
       position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
       clip:rect(0,0,0,0);white-space:nowrap;border:0;
@@ -1066,14 +1264,10 @@ function injectRuntimeCssOnce() {
       vertical-align: middle;
     }
     .dft-tab-icon-haki::before {
-      content: "";
+      content: "\\f132";
       display: inline-block;
-      width: 1em;
-      height: 1em;
-      background-image: url("${ICON_HAKI}");
-      background-size: contain;
-      background-repeat: no-repeat;
-      background-position: center;
+      font-family: "Font Awesome 6 Free";
+      font-weight: 900;
       vertical-align: middle;
     }
   `;
@@ -1118,6 +1312,20 @@ function getChargesCurrentForMode(actor, mode, chargesMax) {
   const stored = actor.getFlag(MODULE_ID, modeFlag(mode, "cur"));
   const cur = Number.isFinite(Number(stored)) ? Number(stored) : chargesMax;
   return clamp(cur, 0, chargesMax);
+}
+
+// Keep stored charges valid after type, bonus, or NPC scaling changes alter the maximum.
+async function reconcileChargesForMode(actor, mode) {
+  const powerType =
+    actor.getFlag(MODULE_ID, modeFlag(mode, "type")) ??
+    (mode === "haki" ? "haki" : "paramecia");
+
+  const level = getEffectivePowerLevel(actor, mode);
+  const bonus = Number(actor.getFlag(MODULE_ID, modeFlag(mode, "bonus")) ?? 0);
+  const max = Math.max(0, getChargesMaxBaseForActor(actor, powerType, level) + bonus);
+  const cur = getChargesCurrentForMode(actor, mode, max);
+
+  await actor.setFlag(MODULE_ID, modeFlag(mode, "cur"), clamp(cur, 0, max));
 }
 
 function clamp(n, min, max) {

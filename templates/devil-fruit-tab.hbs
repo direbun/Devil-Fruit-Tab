@@ -47,11 +47,33 @@
 
         <div class="dft-small">
           Save DC: <strong>{{fruitSaveDC}}</strong>
-          <span class="dft-dot">•</span>
           Attack: <strong>{{fruitAttackModSigned}}</strong>
-          <span class="dft-dot">•</span>
+          Effective Level: <strong>{{effectivePowerLevel}}</strong>
           Max Spell Level: <strong>{{highestSpellLevel}}</strong>
         </div>
+
+        {{#if isGM}}
+          <div class="dft-npc-scaling" title="Use CR or manual override instead of class level for max spell level and charges.">
+            <label class="dft-label">
+              <input type="checkbox" data-action="set-npc-scaling" {{#if npcScaling}}checked{{/if}} />
+              NPC scaling
+            </label>
+
+            {{#if npcScaling}}
+              <label class="dft-label">
+                Effective Level
+                <input class="dft-number" type="number" data-action="set-npc-caster-level"
+                  value="{{npcCasterLevel}}" min="1" max="20" step="1" placeholder="{{effectivePowerLevel}}" />
+              </label>
+
+              <label class="dft-label">
+                Max Spell Level
+                <input class="dft-number" type="number" data-action="set-npc-max-spell-level"
+                  value="{{npcMaxSpellLevel}}" min="0" max="9" step="1" placeholder="{{highestSpellLevel}}" />
+              </label>
+            {{/if}}
+          </div>
+        {{/if}}
       </div>
     </div>
 
@@ -110,7 +132,8 @@
             <img class="dft-item-img" src="{{img}}" alt="{{name}}" data-action="open" />
             <div class="dft-item-name" data-action="open">
               {{name}}
-              {{#if chargeCost}}<span class="dft-cost">({{chargeCost}})</span>{{/if}}
+              <span class="dft-cost">({{chargeCost}} charges{{#if allowUpcast}}, +{{upcastCost}}/level, max {{maxSpellLevel}}{{/if}})</span>
+              {{#if allowUpcast}}<span class="dft-upcast-meta">Default: {{defaultCastLevelMode}}</span>{{/if}}
             </div>
             <div class="dft-item-actions">
               <button class="dft-item-btn" type="button" data-action="use" title="Use"><i class="fa-solid fa-bolt"></i></button>

@@ -45,7 +45,20 @@
 
 .dft-label { display: flex; align-items: center; gap: 0.5rem; }
 .dft-select { min-width: 140px; }
+.dft-number { width: 64px; min-width: 64px; }
 .dft-small { opacity: 0.85; font-size: 0.9rem; }
+
+.dft-npc-scaling {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.75rem;
+  width: 100%;
+  margin-top: 0.35rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.06);
+}
 
 .dft-charges { width: 100%; }
 .dft-charge-top { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
@@ -120,6 +133,7 @@
 
 .dft-item-name { cursor: pointer; }
 .dft-cost { opacity: 0.85; margin-left: 0.35rem; font-size: 0.9rem; }
+.dft-upcast-meta { opacity: 0.72; margin-left: 0.35rem; font-size: 0.82rem; white-space: nowrap; }
 
 .dft-item-actions { display: flex; gap: 0.25rem; }
 .dft-item-btn {
@@ -131,7 +145,7 @@
   cursor: pointer;
 }
 
-.dft-dot { opacity: 0.65; margin: 0 0.35rem; }
+.dft-dot { display: none; }
 
 .tidy5e-sheet .dft-fruit {
   grid-template-columns: 72px 1fr;
@@ -165,4 +179,12 @@
   flex: 0 0 auto;
   justify-content: flex-end;
   margin-left: auto;
+}
+
+.tidy5e-sheet .dft-npc-scaling {
+  align-items: flex-start;
+}
+
+.tidy5e-sheet .dft-upcast-meta {
+  display: inline-block;
 }
